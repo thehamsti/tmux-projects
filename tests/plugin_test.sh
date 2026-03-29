@@ -53,9 +53,45 @@ test_registry_deduplicates_local_projects() {
   assert_eq "$entry_count" "1" "local project registration should upsert instead of duplicate"
 }
 
+test_create_workspace_uses_active_window_indexes() {
+  local temp_root
+  local socket_name
+  local workspace_root
+  local window_names
+  local pane_count
+
+  temp_root="$(mktemp -d "${TMPDIR:-/tmp}/tmux-projects-test.XXXXXX")"
+  socket_name="tmux-projects-test-$$"
+  workspace_root="${temp_root}/workspace"
+  mkdir -p "$workspace_root"
+  trap 'tmux -L "'"${socket_name}"'" kill-server >/dev/null 2>&1 || true; rm -rf "'"${temp_root:-}"'"' RETURN
+
+  tmux -L "$socket_name" -f /dev/null new-session -d -s smoke -c "$workspace_root"
+
+  bash -lc '
+    tmux() {
+      command tmux -L "'"$socket_name"'" "$@"
+    }
+
+    source "'"${PROJECT_ROOT}/scripts/lib/common.sh"'"
+    create_workspace demo "'"$workspace_root"'" default
+  '
+
+  window_names="$(tmux -L "$socket_name" list-windows -t demo -F '#W' | paste -sd ',' -)"
+  pane_count="$(tmux -L "$socket_name" list-panes -t demo:main | wc -l | tr -d ' ')"
+
+  assert_eq "$window_names" "main,bg,logs" "default template should create the expected windows"
+  assert_eq "$pane_count" "3" "default template should create a 3-pane main window under base-index 0"
+
+  tmux -L "$socket_name" kill-server >/dev/null 2>&1 || true
+  rm -rf "$temp_root"
+  trap - RETURN
+}
+
 main() {
   test_common_helpers
   test_registry_deduplicates_local_projects
+  test_create_workspace_uses_active_window_indexes
   printf 'plugin tests passed\n'
 }
 

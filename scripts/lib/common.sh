@@ -310,18 +310,21 @@ create_workspace() {
   local session_name="$1"
   local working_dir="$2"
   local template_name="$3"
+  local main_pane_id=""
+  local right_pane_id=""
 
   case "$template_name" in
     default)
       tmux new-session -d -s "$session_name" -c "$working_dir"
-      tmux rename-window -t "$session_name":1 main
-      tmux split-window -h -t "$session_name":1 -c "$working_dir"
-      tmux split-window -v -t "$session_name":1.2 -c "$working_dir"
-      tmux select-layout -t "$session_name":1 main-vertical
-      tmux select-pane -t "$session_name":1.1
+      main_pane_id="$(tmux display-message -p -t "$session_name" '#{pane_id}')"
+      tmux rename-window -t "$session_name" main
+      right_pane_id="$(tmux split-window -h -P -F '#{pane_id}' -t "$session_name":main -c "$working_dir")"
+      tmux split-window -v -t "$right_pane_id" -c "$working_dir"
+      tmux select-layout -t "$session_name":main main-vertical
+      tmux select-pane -t "$main_pane_id"
       tmux new-window -t "$session_name" -n bg -c "$working_dir"
       tmux new-window -t "$session_name" -n logs -c "$working_dir"
-      tmux select-window -t "$session_name":1
+      tmux select-window -t "$session_name":main
       ;;
     *)
       display_error "Unknown template: $template_name"
