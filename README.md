@@ -4,8 +4,8 @@
 
 Core flows:
 
-- `prefix + S` to register a repo URL or existing local directory and open it as a workspace
-- `prefix + f` to search registered projects quickly and switch to them
+- `prefix + S` to search matching folders under your configured roots, choose one, and open it as a workspace
+- `prefix + f` to switch between already-open tmux project sessions
 
 Built-in template layout:
 
@@ -34,6 +34,8 @@ set -g @tmux-projects-template 'default'
 set -g @tmux-projects-fzf-height '40%'
 set -g @tmux-projects-use-popup 'on'
 set -g @tmux-projects-scan-paths ''
+set -g @tmux-projects-search-max-depth '4'
+set -g @tmux-projects-search-cache-ttl-seconds '300'
 ```
 
 `default` is currently the only built-in template. Setting
@@ -49,16 +51,23 @@ The registry is a tab-separated file managed by the plugin:
 dotfiles	https://github.com/example/dotfiles.git	/Users/me/projects/dotfiles	default
 ```
 
-The registry is authoritative in v1. `prefix + f` searches it first, then falls back to unregistered tmux sessions.
+The registry stores clone metadata, manual registrations, and any projects that live outside your scan roots. The interactive picker is no longer registry-authoritative: it searches configured roots live, then supplements the results with out-of-root registry entries and existing tmux sessions.
 
 ## Usage
 
 ### Add a repo from tmux
 
-Press `prefix + S` and enter a repo URL:
+Press `prefix + S` and type part of a folder name under your configured roots.
+
+Select a match and the plugin will:
+
+1. upsert the selected directory into the registry
+2. create or switch to the tmux workspace
+
+You can still register a repo URL directly from the command line:
 
 ```text
-https://github.com/example/my-app.git
+bash scripts/add-project.sh --input https://github.com/example/my-app.git
 ```
 
 It will:
@@ -70,17 +79,27 @@ It will:
 
 ### Register an existing local directory
 
-Press `prefix + S` and enter a local path:
+You can still register an existing local directory directly:
 
 ```text
-~/projects/existing-app
+bash scripts/add-project.sh --input ~/projects/existing-app
 ```
 
 The plugin will register the directory and open it without cloning.
 
 ### Search and switch
 
-Press `prefix + f` to open an `fzf` picker inside a tmux popup.
+Press `prefix + S` to open the root-scanning picker inside a tmux popup.
+
+Picker behavior:
+
+- with an empty query, the picker shows top-level directories under each configured root
+- once you type, it filters against a cached index of folder names up to `@tmux-projects-search-max-depth`
+- it skips common junk directories such as `.git`, `node_modules`, `dist`, and `build`
+- registry entries outside your scan roots are still surfaced in the picker
+- the cache refreshes automatically when stale; tune staleness with `@tmux-projects-search-cache-ttl-seconds`
+
+Press `prefix + f` to filter only the tmux project sessions that are already open.
 
 If `fzf` is missing, the plugin falls back to tmux's built-in session chooser.
 

@@ -51,7 +51,37 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$input_value" && $interactive -eq 0 ]]; then
-  if supports_popup; then
+  if command -v fzf >/dev/null 2>&1 && supports_popup; then
+    selection_file="$(mktemp "${TMPDIR:-/tmp}/tmux-projects.selection.XXXXXX")"
+    trap 'rm -f "$selection_file"' EXIT
+
+    set +e
+    tmux display-popup -w 80 -h 20 -E "bash '${SCRIPT_DIR}/pick-project.sh' > '${selection_file}'"
+    popup_status=$?
+    set -e
+
+    if [[ $popup_status -eq 130 || $popup_status -eq 1 ]]; then
+      exit 0
+    fi
+    if [[ $popup_status -ne 0 ]]; then
+      display_error "Project picker failed (status $popup_status)"
+      exit 1
+    fi
+
+    if [[ ! -s "$selection_file" ]]; then
+      exit 0
+    fi
+
+    IFS=$'\t' read -r selected_type selected_name selected_path _selected_url <"$selection_file"
+    if [[ "$selected_type" != "project" ]]; then
+      display_error "Unknown picker selection: $selected_type"
+      exit 1
+    fi
+
+    project_name="$selected_name"
+    project_path="$selected_path"
+    input_value="$selected_path"
+  elif supports_popup; then
     tmux display-popup -w 70 -h 12 -E "bash '${SCRIPT_DIR}/add-project.sh' --interactive"
     exit 0
   fi

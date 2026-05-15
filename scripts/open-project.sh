@@ -31,7 +31,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$project_path" && -n "$project_name" ]]; then
-  if entry_line="$(lookup_registry_entry "$project_name" 2>/dev/null)"; then
+  if project_path="$(lookup_scanned_project_path "$project_name" 2>/dev/null)"; then
+    :
+  elif entry_line="$(lookup_registry_entry "$project_name" 2>/dev/null)"; then
     parse_registry_line "$entry_line"
     project_path="$PARSED_REGISTRY_PATH"
     if [[ -z "$project_template" && -n "$PARSED_REGISTRY_TEMPLATE" ]]; then

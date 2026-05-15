@@ -117,6 +117,335 @@ scan_paths() {
   printf '%s\n' "$HOME/projects $HOME/k16"
 }
 
+search_max_depth() {
+  get_config_value "TMUX_PROJECTS_SEARCH_MAX_DEPTH" "@tmux-projects-search-max-depth" "4"
+}
+
+search_cache_dir() {
+  local default_cache_dir
+
+  default_cache_dir="$(dirname "$(registry_file)")/cache"
+  expand_path "$(get_config_value "TMUX_PROJECTS_SEARCH_CACHE_DIR" "@tmux-projects-search-cache-dir" "$default_cache_dir")"
+}
+
+search_cache_ttl_seconds() {
+  get_config_value "TMUX_PROJECTS_SEARCH_CACHE_TTL_SECONDS" "@tmux-projects-search-cache-ttl-seconds" "300"
+}
+
+scan_root_paths() {
+  local configured_scan_paths="${1:-}"
+  local root_path
+  local expanded_root
+
+  if [[ -z "$configured_scan_paths" ]]; then
+    configured_scan_paths="$(scan_paths)"
+  fi
+
+  for root_path in $configured_scan_paths; do
+    expanded_root="$(expand_path "$root_path")"
+    [[ -d "$expanded_root" ]] || continue
+    canonicalize_path "$expanded_root"
+  done | sort -u
+}
+
+is_noise_directory_name() {
+  local directory_name="${1:-}"
+
+  case "$directory_name" in
+    .git | .hg | .svn | .idea | .vscode | .next | .nuxt | .turbo | .cache | .sst | .venv | __pycache__ | node_modules | dist | build | coverage | vendor | target | out | tmp | temp | venv)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+emit_scanned_project_path() {
+  local candidate_path
+  local candidate_name
+
+  candidate_path="$(canonicalize_path "${1:-}")"
+  [[ -d "$candidate_path" ]] || return 0
+
+  candidate_name="$(basename "$candidate_path")"
+  if is_noise_directory_name "$candidate_name"; then
+    return 0
+  fi
+
+  printf '%s\n' "$candidate_path"
+}
+
+string_matches_query() {
+  local candidate_value="${1:-}"
+  local query_value="${2:-}"
+  local candidate_lower
+  local query_token
+  local token_lower
+
+  [[ -z "$query_value" ]] && return 0
+
+  candidate_lower="$(printf '%s' "$candidate_value" | tr '[:upper:]' '[:lower:]')"
+
+  for query_token in $query_value; do
+    token_lower="$(printf '%s' "$query_token" | tr '[:upper:]' '[:lower:]')"
+    [[ "$candidate_lower" == *"$token_lower"* ]] || return 1
+  done
+
+  return 0
+}
+
+lowercase_value() {
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
+scan_paths_fingerprint() {
+  local fingerprint_source
+
+  fingerprint_source="$(scan_paths)"
+  fingerprint_source="${fingerprint_source}"$'\n'"$(search_max_depth)"
+  printf '%s' "$fingerprint_source" | cksum | awk '{print $1}'
+}
+
+search_cache_file() {
+  printf '%s/projects-%s.tsv\n' "$(search_cache_dir)" "$(scan_paths_fingerprint)"
+}
+
+search_cache_lock_dir() {
+  printf '%s.lock\n' "$(search_cache_file)"
+}
+
+file_mtime_epoch() {
+  local target_file="${1:-}"
+
+  stat -f '%m' "$target_file" 2>/dev/null || stat -c '%Y' "$target_file" 2>/dev/null
+}
+
+search_cache_is_fresh() {
+  local cache_file="$1"
+  local ttl_seconds
+  local modified_at
+  local now_epoch
+
+  [[ -f "$cache_file" ]] || return 1
+
+  ttl_seconds="$(search_cache_ttl_seconds)"
+  modified_at="$(file_mtime_epoch "$cache_file" 2>/dev/null || true)"
+  [[ -n "$modified_at" ]] || return 1
+
+  now_epoch="$(date +%s)"
+  [[ $((now_epoch - modified_at)) -le $ttl_seconds ]]
+}
+
+find_searchable_directories() {
+  local root_path="$1"
+  local max_depth="$2"
+
+  find "$root_path" \
+    \( -type d \( \
+    -name .git -o \
+    -name .hg -o \
+    -name .svn -o \
+    -name .idea -o \
+    -name .vscode -o \
+    -name .next -o \
+    -name .nuxt -o \
+    -name .turbo -o \
+    -name .cache -o \
+    -name .sst -o \
+    -name .venv -o \
+    -name __pycache__ -o \
+    -name node_modules -o \
+    -name dist -o \
+    -name build -o \
+    -name coverage -o \
+    -name vendor -o \
+    -name target -o \
+    -name out -o \
+    -name tmp -o \
+    -name temp -o \
+    -name venv \
+    \) -prune \) -o \
+    -mindepth 1 -maxdepth "$max_depth" -type d -print 2>/dev/null
+}
+
+build_search_cache_file() {
+  local cache_file
+  local cache_dir
+  local temp_file
+  local root_path
+  local candidate_path
+  local relative_path
+  local is_top_level
+  local candidate_name
+
+  cache_file="$(search_cache_file)"
+  cache_dir="$(dirname "$cache_file")"
+  mkdir -p "$cache_dir"
+  temp_file="$(mktemp "${cache_dir}/projects.XXXXXX")"
+
+  while IFS= read -r root_path; do
+    while IFS= read -r candidate_path; do
+      candidate_path="$(emit_scanned_project_path "$candidate_path")"
+      [[ -n "$candidate_path" ]] || continue
+
+      relative_path="${candidate_path#"$root_path"/}"
+      is_top_level="0"
+      if [[ "$relative_path" == "$candidate_path" || "$relative_path" != */* ]]; then
+        is_top_level="1"
+      fi
+
+      candidate_name="$(basename "$candidate_path")"
+      printf '%s\t%s\t%s\t%s\n' \
+        "$(lowercase_value "$candidate_name")" \
+        "$candidate_name" \
+        "$candidate_path" \
+        "$is_top_level"
+    done < <(find_searchable_directories "$root_path" "$(search_max_depth)" | sort)
+  done < <(scan_root_paths) |
+    awk -F '\t' '!seen[$3]++ { print $0 }' >"$temp_file"
+
+  mv "$temp_file" "$cache_file"
+}
+
+ensure_search_cache() {
+  local cache_file
+  local lock_dir
+
+  cache_file="$(search_cache_file)"
+  if search_cache_is_fresh "$cache_file"; then
+    printf '%s\n' "$cache_file"
+    return 0
+  fi
+
+  if [[ ! -f "$cache_file" ]]; then
+    build_search_cache_file
+    printf '%s\n' "$cache_file"
+    return 0
+  fi
+
+  lock_dir="$(search_cache_lock_dir)"
+  if mkdir "$lock_dir" 2>/dev/null; then
+    (
+      build_search_cache_file
+      rmdir "$lock_dir" >/dev/null 2>&1 || true
+    ) >/dev/null 2>&1 &
+  fi
+
+  printf '%s\n' "$cache_file"
+}
+
+list_matching_project_paths() {
+  local query_value="${1:-}"
+  local root_path
+  local candidate_path
+  local cache_file
+  local normalized_query
+
+  if [[ -z "$query_value" ]]; then
+    while IFS= read -r root_path; do
+      while IFS= read -r candidate_path; do
+        candidate_path="$(emit_scanned_project_path "$candidate_path")"
+        [[ -n "$candidate_path" ]] || continue
+        printf '%s\n' "$candidate_path"
+      done < <(find_searchable_directories "$root_path" 1 | sort)
+    done < <(scan_root_paths)
+    return 0
+  fi
+
+  cache_file="$(ensure_search_cache)"
+  normalized_query="$(lowercase_value "$query_value")"
+
+  awk -F '\t' -v query="$normalized_query" '
+    BEGIN {
+      token_count = split(query, tokens, /[[:space:]]+/)
+    }
+    {
+      matched = 1
+      for (i = 1; i <= token_count; i++) {
+        if (tokens[i] == "") {
+          continue
+        }
+        if (index($1, tokens[i]) == 0) {
+          matched = 0
+          break
+        }
+      }
+      if (matched) {
+        print $3
+      }
+    }
+  ' "$cache_file"
+}
+
+list_scanned_project_paths() {
+  local root_path
+  local candidate_path
+  local relative_path
+
+  while IFS= read -r root_path; do
+    while IFS= read -r candidate_path; do
+      candidate_path="$(emit_scanned_project_path "$candidate_path")"
+      [[ -n "$candidate_path" ]] || continue
+
+      relative_path="${candidate_path#"$root_path"/}"
+      if [[ "$relative_path" == "$candidate_path" || "$relative_path" != */* ]]; then
+        printf '%s\n' "$candidate_path"
+        continue
+      fi
+
+      if [[ -d "${candidate_path}/.git" ]]; then
+        printf '%s\n' "$candidate_path"
+      fi
+    done < <(find_searchable_directories "$root_path" "$(search_max_depth)" | sort)
+  done < <(scan_root_paths) | sort -u
+}
+
+path_is_under_scan_roots() {
+  local candidate_path
+  local root_path
+
+  candidate_path="$(canonicalize_path "${1:-}")"
+
+  while IFS= read -r root_path; do
+    case "$candidate_path" in
+      "$root_path" | "$root_path"/*)
+        return 0
+        ;;
+    esac
+  done < <(scan_root_paths)
+
+  return 1
+}
+
+lookup_scanned_project_path() {
+  local lookup_name="$1"
+  local matched_path=""
+  local match_count=0
+  local candidate_path
+
+  while IFS= read -r candidate_path; do
+    if [[ "$(basename "$candidate_path")" != "$lookup_name" ]]; then
+      continue
+    fi
+
+    matched_path="$candidate_path"
+    match_count=$((match_count + 1))
+  done < <(list_matching_project_paths "$lookup_name")
+
+  if [[ $match_count -eq 1 ]]; then
+    printf '%s\n' "$matched_path"
+    return 0
+  fi
+
+  if [[ $match_count -gt 1 ]]; then
+    display_error "Multiple scanned projects matched: $lookup_name"
+    return 1
+  fi
+
+  return 1
+}
+
 supports_popup() {
   [[ "$(use_popup)" == "on" ]] || return 1
   command -v tmux >/dev/null 2>&1 || return 1

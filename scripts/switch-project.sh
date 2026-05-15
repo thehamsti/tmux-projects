@@ -6,27 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 build_candidates() {
-  local line
-  local seen_sessions=""
-  local session_name
-
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    parse_registry_line "$line"
-    printf 'project\t%s\t%s\t%s\n' "$PARSED_REGISTRY_NAME" "$PARSED_REGISTRY_PATH" "$PARSED_REGISTRY_URL"
-    seen_sessions+="${PARSED_REGISTRY_NAME}"$'\n'
-  done < <(list_registry_entries)
-
-  if ! command -v tmux >/dev/null 2>&1; then
-    return 0
-  fi
-
-  while IFS= read -r session_name || [[ -n "$session_name" ]]; do
-    [[ -z "$session_name" ]] && continue
-    if printf '%s' "$seen_sessions" | grep -qxF "$session_name"; then
-      continue
-    fi
-    printf 'session\t%s\t%s\t%s\n' "$session_name" "-" "-"
-  done < <(tmux list-sessions -F '#S' 2>/dev/null || true)
+  bash "${SCRIPT_DIR}/search-open-projects.sh" --query ""
 }
 
 if ! command -v fzf >/dev/null 2>&1; then
@@ -34,19 +14,17 @@ if ! command -v fzf >/dev/null 2>&1; then
   exit 0
 fi
 
-candidate_file="$(mktemp "${TMPDIR:-/tmp}/tmux-projects.candidates.XXXXXX")"
 selection_file="$(mktemp "${TMPDIR:-/tmp}/tmux-projects.selection.XXXXXX")"
-trap 'rm -f "$candidate_file" "$selection_file"' EXIT
+trap 'rm -f "$selection_file"' EXIT
 
-build_candidates >"$candidate_file"
-if [[ ! -s "$candidate_file" ]]; then
+if ! build_candidates | grep -q .; then
   display_info "No registered projects or sessions"
   exit 0
 fi
 
 if supports_popup; then
   set +e
-  tmux display-popup -w 80 -h 20 -E "bash -lc 'fzf --delimiter=\"\t\" --with-nth=1,2,3 --prompt=\"Project> \" --height=\"$(fzf_height)\" < \"$candidate_file\" > \"$selection_file\"'"
+  tmux display-popup -w 80 -h 20 -E "bash '${SCRIPT_DIR}/pick-open-project.sh' > '${selection_file}'"
   popup_status=$?
   set -e
 
@@ -58,7 +36,7 @@ if supports_popup; then
     exit 1
   fi
 else
-  tmux command-prompt -p "Project or session name:" "run-shell \"bash '${SCRIPT_DIR}/open-project.sh' --name %1\""
+  tmux command-prompt -p "Open session name:" "switch-client -t %1"
   exit 0
 fi
 
@@ -66,12 +44,9 @@ if [[ ! -s "$selection_file" ]]; then
   exit 0
 fi
 
-IFS=$'\t' read -r selected_type selected_name selected_path _selected_url <"$selection_file"
+IFS=$'\t' read -r selected_type selected_name _selected_path _selected_url <"$selection_file"
 
 case "$selected_type" in
-  project)
-    bash "${SCRIPT_DIR}/open-project.sh" --name "$selected_name" --path "$selected_path"
-    ;;
   session)
     tmux switch-client -t "$selected_name"
     ;;
