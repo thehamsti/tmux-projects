@@ -153,23 +153,41 @@ command -v gh >/dev/null 2>&1 ||
   die "GitHub CLI is required to create the GitHub release"
 
 changelog_file="changelog.md"
+legacy_changelog_file="CHANGELOG.md"
+existing_changelog_file="$changelog_file"
+legacy_changelog_tracked="false"
+changelog_tracked="false"
 temp_changelog="$(mktemp "${TMPDIR:-/tmp}/tmux-projects-changelog.XXXXXX")"
 release_notes_file="$(mktemp "${TMPDIR:-/tmp}/tmux-projects-release-notes.XXXXXX")"
 trap 'rm -f "${temp_changelog:-}" "${release_notes_file:-}"' EXIT
 
-if [[ -f "$changelog_file" ]]; then
-  first_line="$(sed -n '1p' "$changelog_file")"
+if git ls-files --error-unmatch "$legacy_changelog_file" >/dev/null 2>&1; then
+  legacy_changelog_tracked="true"
+fi
+
+if git ls-files --error-unmatch "$changelog_file" >/dev/null 2>&1; then
+  changelog_tracked="true"
+fi
+
+if [[ "$changelog_tracked" == "false" && "$legacy_changelog_tracked" == "true" ]]; then
+  existing_changelog_file="$legacy_changelog_file"
+elif [[ ! -f "$existing_changelog_file" && -f "$legacy_changelog_file" ]]; then
+  existing_changelog_file="$legacy_changelog_file"
+fi
+
+if [[ -f "$existing_changelog_file" ]]; then
+  first_line="$(sed -n '1p' "$existing_changelog_file")"
   if [[ "$first_line" == "# Changelog" ]]; then
     {
       printf '# Changelog\n\n'
       printf '%s\n\n' "$entry"
-      sed '1d' "$changelog_file" | sed '/./,$!d'
+      sed '1d' "$existing_changelog_file" | sed '/./,$!d'
     } >"$temp_changelog"
   else
     {
       printf '# Changelog\n\n'
       printf '%s\n\n' "$entry"
-      cat "$changelog_file"
+      cat "$existing_changelog_file"
     } >"$temp_changelog"
   fi
 else
@@ -179,10 +197,18 @@ else
   } >"$temp_changelog"
 fi
 
-mv "$temp_changelog" "$changelog_file"
 printf '%s\n' "$entry" >"$release_notes_file"
 
-git add "$changelog_file"
+if [[ "$legacy_changelog_tracked" == "true" && "$changelog_tracked" == "false" ]]; then
+  legacy_changelog_temp=".changelog.md.migrating"
+  git mv "$legacy_changelog_file" "$legacy_changelog_temp"
+  mv "$temp_changelog" "$changelog_file"
+  git add "$changelog_file"
+  git rm -f "$legacy_changelog_temp"
+else
+  mv "$temp_changelog" "$changelog_file"
+  git add "$changelog_file"
+fi
 git commit \
   -m "Improvement: Release ${version}" \
   -m "Co-authored-by: Codex <noreply@openai.com>"

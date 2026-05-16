@@ -23,6 +23,7 @@ test_release_script_creates_changelog_commit_and_tag() {
   local gh_notes
   local repo_dir
   local tag_subject
+  local tracked_changelog_files
 
   temp_root="$(mktemp -d "${TMPDIR:-/tmp}/tmux-projects-release-test.XXXXXX")"
   bare_remote="${temp_root}/origin.git"
@@ -60,7 +61,8 @@ EOF
     git remote add origin "$bare_remote"
 
     printf 'one\n' >plugin.txt
-    git add bin/gh release.sh plugin.txt
+    printf '# Changelog\n\n## v0.1.0 - 2026-01-01\n\nOld notes.\n' >CHANGELOG.md
+    git add CHANGELOG.md bin/gh release.sh plugin.txt
     git commit -q -m "Improvement: Add plugin"
     git tag -a v0.1.0 -m "v0.1.0"
     git push -q origin HEAD v0.1.0
@@ -79,6 +81,7 @@ EOF
   gh_args="$(cat "${temp_root}/gh-args.txt")"
   gh_notes="$(cat "${temp_root}/gh-notes.md")"
   tag_subject="$(git -C "$repo_dir" tag -l v0.2.0)"
+  tracked_changelog_files="$(git -C "$repo_dir" ls-files | grep -E '^[Cc][Hh][Aa][Nn][Gg][Ee][Ll][Oo][Gg]\.md$' | paste -sd ',' -)"
 
   [[ "$changelog" == *"## v0.2.0 - "* ]] || {
     printf 'assertion failed: release script should write a versioned changelog entry\n' >&2
@@ -90,6 +93,11 @@ EOF
   }
   [[ "$changelog" == *"Bug: Fix plugin startup"* ]] || {
     printf 'assertion failed: release script should include commit subjects since the previous tag\n' >&2
+    exit 1
+  }
+  [[ "$tracked_changelog_files" == "changelog.md" ]] || {
+    printf 'assertion failed: release script should migrate the legacy uppercase changelog\n' >&2
+    printf 'tracked changelog files: %s\n' "$tracked_changelog_files" >&2
     exit 1
   }
   assert_eq "$tag_subject" "v0.2.0" "release script should create the requested tag"
