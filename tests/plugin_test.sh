@@ -17,34 +17,68 @@ assert_eq() {
 
 test_release_script_creates_changelog_commit_and_tag() {
   local temp_root
+  local bare_remote
   local changelog
+  local gh_args
+  local gh_notes
+  local repo_dir
   local tag_subject
 
   temp_root="$(mktemp -d "${TMPDIR:-/tmp}/tmux-projects-release-test.XXXXXX")"
+  bare_remote="${temp_root}/origin.git"
+  repo_dir="${temp_root}/repo"
   trap 'rm -rf "'"${temp_root:-}"'"' RETURN
 
-  cp "${PROJECT_ROOT}/tools/release.sh" "${temp_root}/release.sh"
+  mkdir "$repo_dir"
+  cp "${PROJECT_ROOT}/tools/release.sh" "${repo_dir}/release.sh"
 
   (
-    cd "$temp_root"
+    cd "$repo_dir"
+    mkdir bin
+    cat >bin/gh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >"${TMUX_PROJECTS_TEST_GH_ARGS}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --notes-file)
+      shift
+      cat "$1" >"${TMUX_PROJECTS_TEST_GH_NOTES}"
+      ;;
+  esac
+  shift
+done
+EOF
+    chmod +x bin/gh
+
+    git init --bare -q "$bare_remote"
     git init -q
     git config user.name "tmux-projects test"
     git config user.email "tmux-projects@example.test"
+    git remote add origin "$bare_remote"
 
     printf 'one\n' >plugin.txt
-    git add release.sh plugin.txt
+    git add bin/gh release.sh plugin.txt
     git commit -q -m "Improvement: Add plugin"
     git tag -a v0.1.0 -m "v0.1.0"
+    git push -q origin HEAD v0.1.0
 
     printf 'two\n' >>plugin.txt
     git add plugin.txt
     git commit -q -m "Bug: Fix plugin startup"
 
-    bash ./release.sh v0.2.0 >/dev/null
+    TMUX_PROJECTS_TEST_GH_ARGS="${temp_root}/gh-args.txt" \
+      TMUX_PROJECTS_TEST_GH_NOTES="${temp_root}/gh-notes.md" \
+      PATH="${repo_dir}/bin:${PATH}" \
+      bash ./release.sh minor >/dev/null
   )
 
-  changelog="$(cat "${temp_root}/CHANGELOG.md")"
-  tag_subject="$(git -C "$temp_root" tag -l v0.2.0)"
+  changelog="$(cat "${repo_dir}/changelog.md")"
+  gh_args="$(cat "${temp_root}/gh-args.txt")"
+  gh_notes="$(cat "${temp_root}/gh-notes.md")"
+  tag_subject="$(git -C "$repo_dir" tag -l v0.2.0)"
 
   [[ "$changelog" == *"## v0.2.0 - "* ]] || {
     printf 'assertion failed: release script should write a versioned changelog entry\n' >&2
@@ -59,6 +93,18 @@ test_release_script_creates_changelog_commit_and_tag() {
     exit 1
   }
   assert_eq "$tag_subject" "v0.2.0" "release script should create the requested tag"
+  [[ "$gh_args" == release\ create\ v0.2.0\ --title\ v0.2.0\ --notes-file\ *\ --verify-tag ]] || {
+    printf 'assertion failed: release script should create a GitHub release\nactual: %s\n' "$gh_args" >&2
+    exit 1
+  }
+  [[ "$gh_notes" == *"Bug: Fix plugin startup"* ]] || {
+    printf 'assertion failed: GitHub release notes should include generated changelog content\n' >&2
+    exit 1
+  }
+  git -C "$bare_remote" rev-parse -q --verify refs/tags/v0.2.0 >/dev/null || {
+    printf 'assertion failed: release script should push the requested tag\n' >&2
+    exit 1
+  }
 
   rm -rf "$temp_root"
   trap - RETURN

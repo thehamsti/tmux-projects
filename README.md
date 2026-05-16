@@ -130,14 +130,24 @@ shfmt -d tmux-projects.tmux scripts/*.sh scripts/lib/*.sh     # if installed
 
 ## Release
 
-Create a local changelog commit and annotated tag:
+Create a `changelog.md` entry, release commit, annotated tag, and GitHub release:
 
 ```bash
 ./tools/release.sh v0.1.0
 ```
 
+The release command uses the GitHub CLI (`gh`) to create the GitHub release.
+
+You can also bump from the latest `vX.Y.Z` tag:
+
+```bash
+./tools/release.sh patch
+./tools/release.sh minor
+./tools/release.sh major
+```
+
 Preview the generated changelog entry without writing anything:
 
 ```bash
-./tools/release.sh v0.1.0 --dry-run
+./tools/release.sh patch --dry-run
 ```
