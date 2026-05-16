@@ -127,3 +127,17 @@ bash -n tmux-projects.tmux scripts/*.sh scripts/lib/*.sh
 shellcheck tmux-projects.tmux scripts/*.sh scripts/lib/*.sh   # if installed
 shfmt -d tmux-projects.tmux scripts/*.sh scripts/lib/*.sh     # if installed
 ```
+
+## Release
+
+Create a local changelog commit and annotated tag:
+
+```bash
+./tools/release.sh v0.1.0
+```
+
+Preview the generated changelog entry without writing anything:
+
+```bash
+./tools/release.sh v0.1.0 --dry-run
+```

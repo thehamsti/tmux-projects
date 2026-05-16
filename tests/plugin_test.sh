@@ -15,6 +15,55 @@ assert_eq() {
   fi
 }
 
+test_release_script_creates_changelog_commit_and_tag() {
+  local temp_root
+  local changelog
+  local tag_subject
+
+  temp_root="$(mktemp -d "${TMPDIR:-/tmp}/tmux-projects-release-test.XXXXXX")"
+  trap 'rm -rf "'"${temp_root:-}"'"' RETURN
+
+  cp "${PROJECT_ROOT}/tools/release.sh" "${temp_root}/release.sh"
+
+  (
+    cd "$temp_root"
+    git init -q
+    git config user.name "tmux-projects test"
+    git config user.email "tmux-projects@example.test"
+
+    printf 'one\n' >plugin.txt
+    git add release.sh plugin.txt
+    git commit -q -m "Improvement: Add plugin"
+    git tag -a v0.1.0 -m "v0.1.0"
+
+    printf 'two\n' >>plugin.txt
+    git add plugin.txt
+    git commit -q -m "Bug: Fix plugin startup"
+
+    bash ./release.sh v0.2.0 >/dev/null
+  )
+
+  changelog="$(cat "${temp_root}/CHANGELOG.md")"
+  tag_subject="$(git -C "$temp_root" tag -l v0.2.0)"
+
+  [[ "$changelog" == *"## v0.2.0 - "* ]] || {
+    printf 'assertion failed: release script should write a versioned changelog entry\n' >&2
+    exit 1
+  }
+  [[ "$changelog" == *"Changes since v0.1.0."* ]] || {
+    printf 'assertion failed: release script should mention the previous tag\n' >&2
+    exit 1
+  }
+  [[ "$changelog" == *"Bug: Fix plugin startup"* ]] || {
+    printf 'assertion failed: release script should include commit subjects since the previous tag\n' >&2
+    exit 1
+  }
+  assert_eq "$tag_subject" "v0.2.0" "release script should create the requested tag"
+
+  rm -rf "$temp_root"
+  trap - RETURN
+}
+
 test_common_helpers() {
   local https_name
   local ssh_name
@@ -204,6 +253,7 @@ test_open_project_search_only_lists_active_sessions() {
 }
 
 main() {
+  test_release_script_creates_changelog_commit_and_tag
   test_common_helpers
   test_registry_deduplicates_local_projects
   test_create_workspace_uses_active_window_indexes
